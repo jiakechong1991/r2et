@@ -9,10 +9,13 @@ INSTALL_REQUIREMENTS = []
 
 
 ext_modules=[
-    CUDAExtension('sdf.csrc', [
-        'sdf/csrc/sdf_cuda.cpp',
-        'sdf/csrc/sdf_cuda_kernel.cu',
-        ]),
+    CUDAExtension(
+            'sdf.csrc', 
+            [
+            'sdf/csrc/sdf_cuda.cpp',
+            'sdf/csrc/sdf_cuda_kernel.cu',
+            ]
+        )
     ]
 
 setup(

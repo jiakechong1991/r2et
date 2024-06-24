@@ -1,1 +1,8 @@
 ./.vscode
+***/__pycache__
+***.pyc
+outside-code/sdf/build/
+outside-code/sdf/dist/
+outside-code/sdf/sdf_pytorch.egg-info/
+.vscode/
+save/
