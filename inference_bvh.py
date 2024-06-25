@@ -26,6 +26,7 @@ from src.utils import get_orient_start
 from src.utils import put_in_world2, get_height, get_height_from_skel
 from transforms import quat2euler
 
+import scipy
 import scipy.ndimage.filters as filters
 from Pivots import Pivots
 
@@ -107,7 +108,7 @@ def process(positions):
     feet_l_h = positions[:-1, fid_l, 1]
     feet_l = (
         ((feet_l_x + feet_l_y + feet_l_z) < velfactor) & (feet_l_h < heightfactor)
-    ).astype(np.float)
+    ).astype(float)
 
     feet_r_x = (positions[1:, fid_r, 0] - positions[:-1, fid_r, 0]) ** 2
     feet_r_y = (positions[1:, fid_r, 1] - positions[:-1, fid_r, 1]) ** 2
@@ -115,7 +116,7 @@ def process(positions):
     feet_r_h = positions[:-1, fid_r, 1]
     feet_r = (
         ((feet_r_x + feet_r_y + feet_r_z) < velfactor) & (feet_r_h < heightfactor)
-    ).astype(np.float)
+    ).astype(float)
 
     """ Get Root Velocity """
     velocity = (positions[1:, 0:1] - positions[:-1, 0:1]).copy()
@@ -137,7 +138,8 @@ def process(positions):
 
     direction_filterwidth = 20
     forward = np.cross(across, np.array([[0, 1, 0]]))
-    forward = filters.gaussian_filter1d(
+    
+    forward = scipy.ndimage.gaussian_filter1d(
         forward, direction_filterwidth, axis=0, mode="nearest"
     )
     forward = forward / np.sqrt((forward**2).sum(axis=-1))[..., np.newaxis]
@@ -164,6 +166,7 @@ def process(positions):
 
 
 def get_inp_from_bvh(bvh_path):
+    """解析input BVH"""
     joints_list = [
         "Spine",
         "Spine1",
@@ -188,6 +191,7 @@ def get_inp_from_bvh(bvh_path):
         "RightHand",
     ]
 
+    # 读取input bvh,然后提取 anim
     anim, _, _ = BVH.load(bvh_path)
     bvh_file = open(bvh_path).read().split("JOINT")
 
@@ -238,8 +242,14 @@ def get_inp_from_bvh(bvh_path):
 
 
 def load_from_bvh(
-    device, inp_shape_path, tgt_shape_path, stats_path, inp_bvh_path, tgt_bvh_path
-):
+    device, 
+    inp_shape_path, # input shape
+    tgt_shape_path, # target shape
+    stats_path, 
+    inp_bvh_path, # input bvh
+    tgt_bvh_path # tgt bvh
+    ):
+    #四元数    帧数据  skeleton
     inpquat, inseq, inpskel = get_inp_from_bvh(inp_bvh_path)
     __, _, tgtskel = get_inp_from_bvh(tgt_bvh_path)
     offset = inseq[:, -8:-4]
@@ -247,16 +257,19 @@ def load_from_bvh(
     T = inpskel.shape[0]
     print("Sequence length:", T)
 
+    # 解析 input shape文件
     inp_fbx_file = np.load(inp_shape_path)
     inp_full_width = inp_fbx_file['full_width'].astype(np.single)
     inp_joint_shape = inp_fbx_file['joint_shape'].astype(np.single)
     inp_shape = np.divide(inp_joint_shape, inp_full_width[None, :]).reshape(-1)
 
+    # 解析 tgt shape文件
     tgt_fbx_file = np.load(tgt_shape_path)
     tgt_full_width = tgt_fbx_file['full_width'].astype(np.single)
     tgt_joint_shape = tgt_fbx_file['joint_shape'].astype(np.single)
     tgt_shape = np.divide(tgt_joint_shape, tgt_full_width[None, :]).reshape(-1)
 
+    # 方差，均值
     local_mean = np.load(join(stats_path, "mixamo_local_motion_mean.npy"))
     local_std = np.load(join(stats_path, "mixamo_local_motion_std.npy"))
     global_mean = np.load(join(stats_path, "mixamo_global_motion_mean.npy"))
@@ -268,9 +281,11 @@ def load_from_bvh(
     inp_skel = inpskel[0, :].reshape([22, 3])
     out_skel = tgtskel[0, :].reshape([22, 3])
 
+    # get skeleton height
     inp_height = get_height(inp_skel) / 100
     tgt_height = get_height(out_skel) / 100
 
+    # 执行z-normal
     inseq = (inseq - local_mean) / local_std
     tgtskel = (tgtskel - local_mean) / local_std
     inpskel = (inpskel - local_mean) / local_std
@@ -282,6 +297,7 @@ def load_from_bvh(
 
     inp_seq = np.concatenate((inseq, offset), axis=-1)
 
+    # 为什么再读取一遍呢？
     tgtanim, tgtnames, tgtftime = BVH.load(tgt_bvh_path)
     inpanim, inpnames, inpftime = BVH.load(inp_bvh_path)
 
@@ -354,7 +370,8 @@ def load_from_bvh(
             if jname == ibvh_joints[k][-len(jname) :]:
                 ito_keep.append(k + 1)
                 break
-
+    
+    # 转移计算设备
     inp_seq = torch.from_numpy(inp_seq.astype(np.single))[None, :].cuda(device)
     inpskel = torch.from_numpy(inpskel.astype(np.single))[None, :].cuda(device)
     tgtskel = torch.from_numpy(tgtskel.astype(np.single))[None, :].cuda(device)
@@ -406,6 +423,7 @@ def get_height(joints):
 
 
 def getmodel(weight_path, arg):
+    """加载模型"""
     model = RetNet(**arg.ret_model_args).cuda(arg.device[0])
     model = nn.DataParallel(model, device_ids=arg.device)
 
@@ -416,9 +434,12 @@ def getmodel(weight_path, arg):
     return model
 
 
-def inference(ret_model, parents, arg):
-    ret_model.eval()
-    ret_model.requires_grad_(False)
+def inference(
+        ret_model:RetNet, # module本身
+        parents, # 父 joint 映射
+        arg):
+    ret_model.eval()  # set 推理模式 
+    ret_model.requires_grad_(False) # 关闭梯度更新
 
     # load data
     (
@@ -453,7 +474,8 @@ def inference(ret_model, parents, arg):
     delta_q: semantics delta
     delta_s: geometry delta
     '''
-    oursL, oursG, quatsB, delta_q, delta_s = ret_model(
+    # 执行 推理pipeline
+    oursL, oursG, quatsB, delta_q, delta_s = ret_model(  
         inp_seq,
         None,
         inpskel,
@@ -578,7 +600,7 @@ def inference(ret_model, parents, arg):
 
 
 def main(arg):
-    retarget_net = getmodel(arg.weights, arg)
+    retarget_net: RetNet = getmodel(arg.weights, arg)
     parents = np.array(
         [-1, 0, 1, 2, 3, 4, 0, 6, 7, 8, 0, 10, 11, 12, 3, 14, 15, 16, 3, 18, 19, 20]
     )
@@ -588,8 +610,9 @@ def main(arg):
 if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     parser = get_parser()
-    # load arg form config file
     p = parser.parse_args()
+
+    # p.config对应 一个config文件
     if p.config is not None:
         with open(p.config, 'r') as f:
             default_arg = yaml.safe_load(f)
@@ -600,5 +623,4 @@ if __name__ == '__main__':
                 assert k in key
         parser.set_defaults(**default_arg)
     arg = parser.parse_args()
-
     main(arg)

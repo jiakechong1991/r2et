@@ -270,6 +270,7 @@ class MotionDis(nn.Module):
 
 
 class RetNet(nn.Module):
+    """skeleton-aware module"""
     def __init__(
         self,
         num_joint=22,

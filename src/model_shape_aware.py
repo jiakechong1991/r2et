@@ -356,6 +356,12 @@ def normalized(angles):
 
 
 class RetNet(nn.Module):
+    """
+    整体 pipeline module:
+    skeleton-aware
+    shape-aware
+    gate门控
+    """
     def __init__(
         self,
         num_joint=22,
@@ -366,15 +372,19 @@ class RetNet(nn.Module):
     ):
         super(RetNet, self).__init__()
         self.num_joint = num_joint
+        # 定义网络层
+
+        # skeleton-aware module
         self.delta_dec = DeltaDecoder(
             num_joint, token_channels, embed_channels_p, hidden_channels_p, kp
         )
-
+        # shape-aware module
         self.delta_leftArm_dec = DeltaShapeDecoder(3, hidden_channels_p, kp)
         self.delta_rightArm_dec = DeltaShapeDecoder(3, hidden_channels_p, kp)
         self.delta_leftLeg_dec = DeltaShapeDecoder(2, hidden_channels_p, kp)
         self.delta_rightLeg_dec = DeltaShapeDecoder(2, hidden_channels_p, kp)
 
+        # 门控module
         self.weights_dec = WeightsDecoder(num_joint, hidden_channels_p, kp)
 
     def forward(

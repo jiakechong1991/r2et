@@ -126,6 +126,7 @@ def normalized(angles):
 
 
 class PMNet(nn.Module):
+    """这是一个前辈们的对比模型"""
     def __init__(
         self,
         num_joint=22,
