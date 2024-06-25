@@ -81,35 +81,48 @@ def softmax(x, **kw):
 
 
 def softmin(x, **kw):
+    """某种操作，原理未知"""
     return -softmax(-x, **kw)
 
 
-def process(positions):
+def process(positions): # joint的全局position
     """Put on Floor"""
+    # 定义左脚[8,9两个joint]（左脚跟，左脚尖），右脚[12,13两个joint] 索引
     fid_l, fid_r = np.array([8, 9]), np.array([12, 13])
-    foot_heights = np.minimum(positions[:, fid_l, 1], positions[:, fid_r, 1]).min(
-        axis=1
-    )
+    # 找出抬角最高的“脚高度”--XYZ顺序-axis--难道是Y朝上?
+    foot_heights = np.minimum(positions[:, fid_l, 1], positions[:, fid_r, 1]).min(axis=1)
+    # print(foot_heights.shape) # （743，）
     floor_height = softmin(foot_heights, softness=0.5, axis=0)
-
+    # print(floor_height)  # 1.0126096469286376
+    # position-Y 全部减去floor_height，BVH平移到floor上
     positions[:, :, 1] -= floor_height
 
     """ Add Reference Joint """
     trajectory_filterwidth = 3
+    # 每帧的root关节position
     reference = positions[:, 0]
     positions = np.concatenate([reference[:, np.newaxis], positions], axis=1)
 
     """ Get Foot Contacts """
+    # 速度阈值因子： 小于它，则认为 脚部 不移动
+    # 高度因子： 小于它，则认为 脚 接地
     velfactor, heightfactor = np.array([0.15, 0.15]), np.array([9.0, 6.0])
 
+    # list[:-1] 代码除最后一个元素外的切片
+    #计算再X 轴上的移动距离 [计算连续两帧之间的x轴距离（t帧）-(t-1帧)]
+    # list[1,2,3,4]  list[1:] = [2,3,4] list[:-1] = [1,2,3]
     feet_l_x = (positions[1:, fid_l, 0] - positions[:-1, fid_l, 0]) ** 2
     feet_l_y = (positions[1:, fid_l, 1] - positions[:-1, fid_l, 1]) ** 2
     feet_l_z = (positions[1:, fid_l, 2] - positions[:-1, fid_l, 2]) ** 2
-    feet_l_h = positions[:-1, fid_l, 1]
+    # print(feet_l_x.shape)  # (742, 2)
+    feet_l_h = positions[:-1, fid_l, 1] # (742, 2)
+    print(feet_l_h)
+    # 判断 left foot是否接地
     feet_l = (
         ((feet_l_x + feet_l_y + feet_l_z) < velfactor) & (feet_l_h < heightfactor)
     ).astype(float)
 
+    # 右脚
     feet_r_x = (positions[1:, fid_r, 0] - positions[:-1, fid_r, 0]) ** 2
     feet_r_y = (positions[1:, fid_r, 1] - positions[:-1, fid_r, 1]) ** 2
     feet_r_z = (positions[1:, fid_r, 2] - positions[:-1, fid_r, 2]) ** 2
@@ -119,34 +132,51 @@ def process(positions):
     ).astype(float)
 
     """ Get Root Velocity """
+    # 差分，计算2帧之间 root-position的偏移量 。 (根关节在每一帧相对于前一帧的移动量)
     velocity = (positions[1:, 0:1] - positions[:-1, 0:1]).copy()
 
     """ Remove Translation """
+    #所有joint 在x的平移 归零
     positions[:, :, 0] = positions[:, :, 0] - positions[:, :1, 0]
+    #所有joint 在y的平移 归零
     positions[1:, 1:, 1] = positions[1:, 1:, 1] - (
         positions[1:, :1, 1] - positions[:1, :1, 1]
     )
+    #所有joint 在z的平移 归零
     positions[:, :, 2] = positions[:, :, 2] - positions[:, :1, 2]
 
     """ Get Forward Direction """
     # Original indices + 1 for added reference joint
+    # hip_l, hip_r--对应->LeftLeg, rightLeg  
+    # sdr_l sdf_r -->对应 --> LeftArm, RightArm  
     sdr_l, sdr_r, hip_l, hip_r = 15, 19, 7, 11
-    across1 = positions[:, hip_l] - positions[:, hip_r]
-    across0 = positions[:, sdr_l] - positions[:, sdr_r]
+    across1 = positions[:, hip_l] - positions[:, hip_r] # 对应  左腿-右腿 之间向量
+    across0 = positions[:, sdr_l] - positions[:, sdr_r] # 对应 左臂右臂之间的向量
     across = across0 + across1
+    # 转换成 单位向量
     across = across / np.sqrt((across**2).sum(axis=-1))[..., np.newaxis]
 
+    # 定义滤波器窗口
     direction_filterwidth = 20
+    # 获得每帧 body的朝向方向
     forward = np.cross(across, np.array([[0, 1, 0]]))
     
+    # 沿着帧的维度，对body朝向 做 （附近20帧）的滤波平滑
     forward = scipy.ndimage.gaussian_filter1d(
-        forward, direction_filterwidth, axis=0, mode="nearest"
+        forward, 
+        direction_filterwidth, # 窗口大小
+        axis=0, # 沿着第0轴
+        mode="nearest" # 边界地方 采用“最近邻”处理
     )
+    # 对朝向向量做 标准化
     forward = forward / np.sqrt((forward**2).sum(axis=-1))[..., np.newaxis]
 
     """ Remove Y Rotation """
+    # 把z轴作为目标方向
     target = np.array([[0, 0, 1]]).repeat(len(forward), axis=0)
+    # 计算朝向&z轴的夹角（四元数）
     rotation = Quaternions.between(forward, target)[:, np.newaxis]
+    # 反向旋转回去
     positions = rotation * positions
 
     """ Get Root Rotation """
@@ -177,11 +207,11 @@ def get_inp_from_bvh(bvh_path):
         "LeftLeg",
         "LeftFoot",
         "LeftToeBase",
-        "RightUpLeg",
+        "RightUpLeg", 
         "RightLeg",
         "RightFoot",
-        "RightToeBase",
-        "LeftShoulder",
+        "RightToeBase",  
+        "LeftShoulder", 
         "LeftArm",
         "LeftForeArm",
         "LeftHand",
@@ -192,17 +222,22 @@ def get_inp_from_bvh(bvh_path):
     ]
 
     # 读取input bvh,然后提取 anim
-    anim, _, _ = BVH.load(bvh_path)
+    anim, name_, _ = BVH.load(bvh_path)  # animation, joint_names, frametime
+    # print(anim.shape) # (742, 65)
     bvh_file = open(bvh_path).read().split("JOINT")
 
+    # [' mixamorig:Spine', ' mixamorig:Spine1', ' mixamorig:Spine2', ' mixamorig:Neck'..]
+    # mixamo的骨架上，有64个joint,只提取特定的，我们关注的骨架
+    # 相当于进行了[骨架的简化]
     bvh_joints = [f.split("\n")[0] for f in bvh_file[1:]]
-    to_keep = [0]
-    for jname in joints_list:
+    to_keep = [0]  # 标记要保留的joint名称
+    for jname in joints_list: 
         for k in range(len(bvh_joints)):
+            # 如果该joint-name包含指定 字符串
             if jname == bvh_joints[k][-len(jname) :]:
                 to_keep.append(k + 1)
                 break
-
+    #对简化后的骨架，重新关联“父joint”
     anim.parents = anim.parents[to_keep]
     for i in range(1, len(anim.parents)):
         """If joint not needed, connect to the previous joint"""
@@ -210,12 +245,21 @@ def get_inp_from_bvh(bvh_path):
             anim.parents[i] = anim.parents[i] - 1
         anim.parents[i] = to_keep.index(anim.parents[i])
 
+    # 新骨架的position,rotation,orient数据准备
+    print("new骨架映射：")
+    for item_index in range(len(to_keep)):
+        print("当前index:{i}, joint-num:{a}, joint-name:{n}".format(
+            i=item_index, a=to_keep[item_index], n=name_[to_keep[item_index]]))
     anim.positions = anim.positions[:, to_keep, :]
     anim.rotations.qs = anim.rotations.qs[:, to_keep, :]
     anim.orients.qs = anim.orients.qs[to_keep, :]
     if anim.positions.shape[0] > 1:
+        # 计算 joint的全局position
         joints = Animation.positions_global(anim)
+        # print(joints.shape) # (742, 22, 3)
+        # 拼接：   joints[-1:] ： 最后一帧
         joints = np.concatenate([joints, joints[-1:]], axis=0)
+        # joint信息  joint朝向与z轴的夹角
         new_joints, rotation = process(joints)
         new_joints = new_joints[:, 3:]
 
@@ -237,7 +281,7 @@ def get_inp_from_bvh(bvh_path):
         print("Load Success.", bvh_path)
         return data_quat, data_seq, data_skel
 
-    print("bvh Error!")
+    print("bvh 提取 Error!")
     return None
 
 
