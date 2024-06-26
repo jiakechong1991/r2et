@@ -389,20 +389,24 @@ class RetNet(nn.Module):
 
     def forward(
         self,
-        seqA,
-        seqB,
-        skelA,
-        skelB,
-        shapeA,
-        shapeB,
-        quatA,
-        inp_height,
-        tgt_height,
-        local_mean,
+        seqA, # source-joint-position
+        seqB, # None
+        skelA, # source-parent-joint-offset
+        skelB, # target-parent-joint-offset
+
+        shapeA, # source-shape参数
+        shapeB, # target-shape参数
+        
+        quatA, # source-joint-ratation
+        inp_height, # source-skeltion-height
+        tgt_height, # target-skeltion-height
+        # 统计量
+        local_mean, 
         local_std,
         quat_mean,
         quat_std,
-        parents,
+
+        parents, # parent关节映射
         k=-1,
     ):
         '''
@@ -451,7 +455,7 @@ class RetNet(nn.Module):
             qoutA_t = quatA[:, t, :, :]  # motion copy
             qoutA_t_denorm = quatA_denorm[:, t, :, :]
 
-            # delta qs
+            # delta qs -----sekelton-aware-module
             refA_feed = refA_feed.view((bs, self.num_joint, 3))
             refB_feed = refB_feed.view((bs, self.num_joint, 3))
             delta1 = self.delta_dec(qoutA_t, refA_feed, refB_feed)
@@ -463,7 +467,8 @@ class RetNet(nn.Module):
             qB_base = qB_base.detach()
             qB_base_norm = (qB_base - quat_mean) / quat_std
 
-            # delta qg
+            # delta qg ------shape-aware-module---------------
+            ####leftArm
             delta2_leftArm = self.delta_leftArm_dec(shapeA, shapeB, qB_base_norm)
             delta2_leftArm = torch.reshape(delta2_leftArm, [bs, 3, 4])
             delta2_leftArm = (
@@ -471,7 +476,8 @@ class RetNet(nn.Module):
                 + quat_mean[:, leftArm_joints, :]
             )
             delta2_leftArm = normalized(delta2_leftArm)
-
+            
+            ####RightArm
             delta2_rightArm = self.delta_rightArm_dec(shapeA, shapeB, qB_base_norm)
             delta2_rightArm = torch.reshape(delta2_rightArm, [bs, 3, 4])
             delta2_rightArm = (
@@ -480,6 +486,7 @@ class RetNet(nn.Module):
             )
             delta2_rightArm = normalized(delta2_rightArm)
 
+            ####LeftLeg
             delta2_leftLeg = self.delta_leftLeg_dec(shapeA, shapeB, qB_base_norm)
             delta2_leftLeg = torch.reshape(delta2_leftLeg, [bs, 2, 4])
             delta2_leftLeg = (
@@ -488,6 +495,7 @@ class RetNet(nn.Module):
             )
             delta2_leftLeg = normalized(delta2_leftLeg)
 
+            ####rightLeg
             delta2_rightLeg = self.delta_rightLeg_dec(shapeA, shapeB, qB_base_norm)
             delta2_rightLeg = torch.reshape(delta2_rightLeg, [bs, 2, 4])
             delta2_rightLeg = (
@@ -502,6 +510,7 @@ class RetNet(nn.Module):
                 .cuda(seqA.device)
                 .repeat(bs, self.num_joint, 1)
             )
+            # 组合
             delta2[:, leftArm_joints, :] = delta2_leftArm
             delta2[:, rightArm_joints, :] = delta2_rightArm
             delta2[:, leftLeg_joints, :] = delta2_leftLeg
@@ -510,7 +519,6 @@ class RetNet(nn.Module):
 
             # balacing gate
             bala_gate = self.weights_dec(refB_feed, shapeB, qB_base_norm)
-
             qB_hat = q_mul_q(qB_base, delta2)
 
             one_w = np.random.binomial(1, p=0.4)
@@ -518,7 +526,7 @@ class RetNet(nn.Module):
                 bala_gate = torch.ones(bala_gate.shape, dtype=torch.float32).cuda(
                     seqA.device
                 )
-
+            # 线性插值
             qB_t = torch.lerp(qB_base, qB_hat, bala_gate[:, :, None] * k)
 
             B_quats_base.append(qB_base)
@@ -533,7 +541,8 @@ class RetNet(nn.Module):
             localB_base_t = FK.run(parents, refB, qB_base)
             localB_base_t = (localB_base_t - local_mean) / local_std
             B_locals_base.append(localB_base_t)
-
+        
+        # 逐帧推理结束
         # stack all frames
         quatB_rt = torch.stack(B_quats_rt, dim=1)  # shape: (batch_size, T, 22, 4)
         delta_qs = torch.stack(delta_qs, dim=1)

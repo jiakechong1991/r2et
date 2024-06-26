@@ -65,12 +65,19 @@ def get_parser():
 
 
 def get_skel(joints, parents):
+    """获得joint相对 parent-joint之间的offset"""
+    """
+    parents: joint的parent关系 [-1  0  1  2  3  4  0  6  7  8  0 10 11 12  3 14 15 16  3 18 19 20]
+    resturn: joint-offset [22, 3]
+    """
     c_offsets = []
     for j in range(parents.shape[0]):
-        if parents[j] != -1:
+        if parents[j] != -1:# 非root joint
+            # 计算该joint在运动状态，和parent-position的offset
             c_offsets.append(joints[j, :] - joints[parents[j], :])
-        else:
+        else: # 如果该joint是root关节
             c_offsets.append(joints[j, :])
+    # print(np.stack(c_offsets, axis=0).shape)  # [22,3]
     return np.stack(c_offsets, axis=0)
 
 
@@ -196,7 +203,11 @@ def process(positions): # joint的全局position
 
 
 def get_inp_from_bvh(bvh_path):
-    """解析input BVH"""
+    """解析input BVH
+    return (data_quat, # [frame, joint_num(22), (4)四元数]
+        data_seq, # [frame, (74=22*3(postion)+6(速度信息)+2（左右角接地flag）)]
+        data_skel) #[frame, 22, 3(parent-offset-position)]
+    """
     joints_list = [
         "Spine",
         "Spine1",
@@ -259,7 +270,7 @@ def get_inp_from_bvh(bvh_path):
         # print(joints.shape) # (742, 22, 3)
         # 拼接：   joints[-1:] ： 最后一帧
         joints = np.concatenate([joints, joints[-1:]], axis=0)
-        # joint信息  joint朝向与z轴的夹角
+        # joint-position+速度+左右角接地 信息  joint朝向与z轴的夹角
         new_joints, rotation = process(joints)
         new_joints = new_joints[:, 3:]
 
@@ -275,11 +286,16 @@ def get_inp_from_bvh(bvh_path):
 
         anim.rotations.qs[...] = anim.orients.qs[None]
         tjoints = Animation.positions_global(anim)
+        # print(anim.parents)
+        
+        # joint-offset
         anim.positions[...] = get_skel(tjoints[0], anim.parents)[None]
         anim.positions[:, 0, :] = new_joints[:, :3]
         data_skel = anim.positions
         print("Load Success.", bvh_path)
-        return data_quat, data_seq, data_skel
+        return (data_quat, # [frame, joint_num(22), (4)四元数]
+                data_seq, # [frame, (74=22*3(postion)+6(速度信息)+2（左右角接地flag）)]
+                data_skel) #[frame, 22, 3(parent-offset-position)]
 
     print("bvh 提取 Error!")
     return None
@@ -293,18 +309,39 @@ def load_from_bvh(
     inp_bvh_path, # input bvh
     tgt_bvh_path # tgt bvh
     ):
-    #四元数    帧数据  skeleton
+    #四元数  帧数据(posiont+速度6+左右脚2)  parent-joint-offset-position
     inpquat, inseq, inpskel = get_inp_from_bvh(inp_bvh_path)
     __, _, tgtskel = get_inp_from_bvh(tgt_bvh_path)
-    offset = inseq[:, -8:-4]
+    offset = inseq[:, -8:-4]  # 尾部4列
+    print(offset.shape) # [742, 4]
+    # joint-position[frame, 22, 3]
     inseq = np.reshape(inseq[:, :-8], [inseq.shape[0], -1, 3])
-    T = inpskel.shape[0]
-    print("Sequence length:", T)
 
-    # 解析 input shape文件
+    T = inpskel.shape[0]
+    print("Sequence(帧) length:", T)
+
+    """
+    # 解析 input shape文件(FBX-mesh文件的解析结果), 有如下key:
+    skinning_weights
+    joint_names: 关节列表
+    root_orient
+    rest_vertices
+    rest_faces
+    skeleton
+    subject
+    vertex_part
+    rest_body_vertices: body部分的顶点 shape(5452, 3)
+    rest_arm_vertices： arm部分 包含的顶点， shape:[5792（顶点数）, 3(position)]
+    body_width: body躯干的包围box [68.70365524, 98.38961029, 69.76597977]
+    arm_width: arm的包围box [ 38.06436157, 108.1993351 ,  46.32997704]
+    full_width: body的包围box [234.76997375, 185.918993  ,  69.76597977]
+    joint_shape: size [22, 3（包围box?）]
+    crude_verts_ids
+    """
     inp_fbx_file = np.load(inp_shape_path)
     inp_full_width = inp_fbx_file['full_width'].astype(np.single)
     inp_joint_shape = inp_fbx_file['joint_shape'].astype(np.single)
+    # 转换成比例，joint的长度(绝对值) 转 比例值
     inp_shape = np.divide(inp_joint_shape, inp_full_width[None, :]).reshape(-1)
 
     # 解析 tgt shape文件
@@ -324,16 +361,15 @@ def load_from_bvh(
 
     inp_skel = inpskel[0, :].reshape([22, 3])
     out_skel = tgtskel[0, :].reshape([22, 3])
-
-    # get skeleton height
+    # get skeleton height（单位是米）
     inp_height = get_height(inp_skel) / 100
     tgt_height = get_height(out_skel) / 100
 
     # 执行z-normal
-    inseq = (inseq - local_mean) / local_std
-    tgtskel = (tgtskel - local_mean) / local_std
-    inpskel = (inpskel - local_mean) / local_std
-    inpquat = (inpquat - quat_mean) / quat_std
+    inseq = (inseq - local_mean) / local_std  # 对joint-position进行标准化
+    inpskel = (inpskel - local_mean) / local_std  # 对源 parent-joint-offset进行标准化
+    tgtskel = (tgtskel - local_mean) / local_std  # 对target parent-joint-offset进行标准化
+    inpquat = (inpquat - quat_mean) / quat_std # 对源 joint-ratation进行标准化
 
     inseq = inseq.reshape([inseq.shape[0], -1])
     inpskel = inpskel.reshape([inpskel.shape[0], -1])
@@ -345,11 +381,13 @@ def load_from_bvh(
     tgtanim, tgtnames, tgtftime = BVH.load(tgt_bvh_path)
     inpanim, inpnames, inpftime = BVH.load(inp_bvh_path)
 
+    #############获取目标BVH中要 提取的joint-name
     tbvh_file = open(tgt_bvh_path).read().split("JOINT")
     tbvh_joints = [
         f.split("\n")[0].split(":")[-1].split(" ")[-1] for f in tbvh_file[1:]
     ]
     tto_keep = [0]
+    # 20个joint
     joints_list = [
         "Spine",
         "Spine1",
@@ -380,11 +418,13 @@ def load_from_bvh(
                 tto_keep.append(k + 1)
                 break
 
+    #############获取源BVH中要 提取的joint-name
     ibvh_file = open(inp_bvh_path).read().split("JOINT")
     ibvh_joints = [
         f.split("\n")[0].split(":")[-1].split(" ")[-1] for f in ibvh_file[1:]
     ]
     ito_keep = [0]
+    # 20个joint
     joints_list = [
         "Spine",
         "Spine1",
@@ -414,7 +454,7 @@ def load_from_bvh(
             if jname == ibvh_joints[k][-len(jname) :]:
                 ito_keep.append(k + 1)
                 break
-    
+    #######################数据加工结束########################################
     # 转移计算设备
     inp_seq = torch.from_numpy(inp_seq.astype(np.single))[None, :].cuda(device)
     inpskel = torch.from_numpy(inpskel.astype(np.single))[None, :].cuda(device)
@@ -428,28 +468,35 @@ def load_from_bvh(
     tgt_height_[0, 0] = tgt_height
 
     return (
-        inp_seq,
-        inpskel,
-        tgtskel,
-        inp_shape,
-        tgt_shape,
-        inpquat,
-        inp_height_,
-        tgt_height_,
+        inp_seq, # source parent-joint-position进行标准化
+        inpskel, # source parent-joint-offset进行标准化
+        tgtskel, # target parent-joint-offset进行标准化
+        inp_shape, # 归一化后的source joint shape
+        tgt_shape, # 归一化后的target joint shape
+        inpquat, # 归一化后的source joint rotation
+    
+        inp_height_, # source 骨架高度
+        tgt_height_, # target 骨架高度
+        ###############stats统计信息
         local_mean,
         local_std,
         quat_mean,
         quat_std,
+        # 全局motiona的均值，方差
         global_mean,
         global_std,
+        
+        #target BVH中 提取的ani
         tgtanim,
         tgtnames,
         tgtftime,
-        inpanim,
-        inpnames,
-        inpftime,
-        ito_keep,
-        tto_keep,
+        #source BVH中 提取的ani
+        inpanim, # ani
+        inpnames, # joint-name
+        inpftime, # 帧时间
+        
+        ito_keep, # source BVH中，要保存的joint-name
+        tto_keep, # target BVH中，要保存的joint-name
     )
 
 
@@ -520,13 +567,14 @@ def inference(
     '''
     # 执行 推理pipeline
     oursL, oursG, quatsB, delta_q, delta_s = ret_model(  
-        inp_seq,
+        inp_seq, # source joint-position （z-norml后）
         None,
-        inpskel,
-        tgtskel,
-        inp_shape,
-        tgt_shape,
-        inpquat,
+        inpskel, # source parent-joint-offset（z-norml后）
+        tgtskel, # target parent-joint-offset（z-norml后）
+        inp_shape, # source shape
+        tgt_shape, # target shape
+        inpquat, # source rotation
+
         inp_height,
         tgt_height,
         local_mean,
@@ -537,6 +585,7 @@ def inference(
         arg.k,
     )
 
+    # 从cuda截取到cpu上
     localB = oursL.clone()
     oursL = oursL.cpu().numpy()
     oursG = oursG.cpu().numpy()
@@ -555,7 +604,8 @@ def inference(
     local_std_rshp = local_std.reshape((1, 1, -1))
     oursL[:, :, :] = oursL[:, :, :] * local_std_rshp + local_mean_rshp
     oursG[:, :, :] = oursG[:, :, :]
-
+    
+    # 还原z-normal
     localA = (
         inp_seq_gpu[:, :, :-4].view(localB.shape)
         * torch.from_numpy(local_std)[None, :].cuda()
@@ -574,13 +624,12 @@ def inference(
     """ VIDEO BVH """
     i = 0
     max_steps = tgtskel.shape[1]
-    tjoints = np.reshape(
-        tgtskel[i] * local_std_rshp + local_mean_rshp, [max_steps, -1, 3]
-    )
+    tjoints = np.reshape(tgtskel[i] * local_std_rshp + local_mean_rshp, [max_steps, -1, 3])
 
     tmp_gt = Animation.positions_global(
         tgtanim
-    )  # Given an animation compute the global joint positions at at every frame
+    ) 
+    # Given an animation compute the global joint positions at at every frame
     start_rots = get_orient_start(
         tmp_gt,
         tgtjoints[14],  # left shoulder
@@ -624,17 +673,12 @@ def inference(
     to_name = arg.load_inp_data["tgt_bvh_path"].split('/')[-2]
     bvh_name = arg.load_inp_data["inp_bvh_path"].split('/')[-1]
 
-    BVH.save(
-        join(arg.save_path, from_name + '_inp_' + bvh_name), inpanim, inpname, inpftime
-    )
+    # 把source,和target BVH重新恢复和保存（用于验证pipeline中的函数正确性）
+    BVH.save(join(arg.save_path, from_name + '_inp_' + bvh_name), inpanim, inpname, inpftime)
+    BVH.save(join(arg.save_path, to_name + '_gt_' + bvh_name), tgtanim, tgtname, tgtftime)
 
-    BVH.save(
-        join(arg.save_path, to_name + '_gt_' + bvh_name), tgtanim, tgtname, tgtftime
-    )
-
+    """保存 Ours bvh file """
     bvh_path = join(arg.save_path, from_name + '_to_' + to_name + '_' + bvh_name)
-
-    """ Ours bvh file """
     tgtanim.positions[:, tgtjoints] = tjoints
     tgtanim.offsets[tgtjoints[1:]] = tjoints[0, 1:]
     cquat[:, 0:1, :] = (rots * Quaternions(cquat[:, 0:1, :])).qs
