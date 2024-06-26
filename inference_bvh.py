@@ -468,7 +468,7 @@ def load_from_bvh(
     tgt_height_[0, 0] = tgt_height
 
     return (
-        inp_seq, # source parent-joint-position进行标准化
+        inp_seq, # source joint-position进行标准化
         inpskel, # source parent-joint-offset进行标准化
         tgtskel, # target parent-joint-offset进行标准化
         inp_shape, # 归一化后的source joint shape
