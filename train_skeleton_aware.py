@@ -364,6 +364,7 @@ def main(arg):
     data_feeder = Feeder(**arg.train_feeder_args)
     retarget_net = RetNet(**arg.ret_model_args).cuda(arg.device[0])
     discriminator_net = MotionDis(**arg.dis_model_args).cuda(arg.device[0])
+    
     retarget_net = nn.DataParallel(retarget_net, device_ids=arg.device)
     discriminator_net = nn.DataParallel(discriminator_net, device_ids=arg.device)
 
@@ -489,4 +490,6 @@ if __name__ == '__main__':
                 assert k in key
         parser.set_defaults(**default_arg)
     arg = parser.parse_args()
+    print(arg)
+    1/0
     main(arg)
