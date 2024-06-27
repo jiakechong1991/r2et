@@ -482,7 +482,7 @@ if __name__ == '__main__':
     p = parser.parse_args()
     if p.config is not None:
         with open(p.config, 'r') as f:
-            default_arg = yaml.load(f)
+            default_arg = yaml.safe_load(f)
         key = vars(p).keys()
         for k in default_arg.keys():
             if k not in key:
@@ -491,5 +491,39 @@ if __name__ == '__main__':
         parser.set_defaults(**default_arg)
     arg = parser.parse_args()
     print(arg)
+    """
+    Namespace(
+        config='./config/train_skeleton_aware.yaml', 
+        phase='train', 
+        work_dir='./work_dir/train_sklaware', 
+        mesh_path='./datasets/mixamo/train_shape/', 
+        model_save_name='r2et_skeleton_aware', 
+        train_feeder_args={
+            'data_path': './datasets/mixamo/train_q', 
+            'stats_path': './datasets/mixamo/stats', 
+            'shape_path': './datasets/mixamo/train_shape', 
+            'max_length': 60
+            }, 
+        device=[0], 
+        base_lr=0.001, 
+        batch_size=32, 
+        alpha=100.0, nu=100.0, 
+        mu=10.0, 
+        euler_ord='yzx', 
+        max_length=60, 
+        num_joint=22, kp=0.8, 
+        margin=0.3, lam=2, 
+        ret_model_args={
+            'num_joint': 22, 
+            'token_channels': 64, 
+            'hidden_channels_p': 256, 
+            'embed_channels_p': 128, 
+            'kp': 0.8
+            }, 
+        dis_model_args={'kp': 0.8}, 
+        weight_decay=0.0, 
+        step=[20], 
+        epoch=30)
+    """
     1/0
     main(arg)

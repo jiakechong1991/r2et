@@ -7,6 +7,12 @@ from os.path import exists, join
 
 class Feeder(Dataset):
     def __init__(self, data_path, stats_path, shape_path, max_length):
+        """
+        'data_path': './datasets/mixamo/train_q', #输入资源路径(角色的骨架解析数据)
+        'stats_path': './datasets/mixamo/stats', # 输出路径
+        'shape_path': './datasets/mixamo/train_shape', # 输入资源路径
+        'max_length': 60 # 
+        """
         self.data_path = data_path
         self.stats_path = stats_path
         self.max_length = max_length
@@ -18,23 +24,27 @@ class Feeder(Dataset):
         self.rightarm_bone_lst = np.array([19, 20, 21])
         self.leftleg_bone_lst = np.array([6, 7, 8, 9])
         self.rightleg_bone_lst = np.array([10, 11, 12, 13])
-        self.body_bone_lst = np.array([0, 1, 2, 3, 5])
+        self.body_bone_lst = np.array([0, 1, 2, 3, 5])  # body躯干部分
 
         # ----------------- load shape files -------------------------------------------------------------
-        self.shape_dic = {}
+        self.shape_dic = {} # {“character_name”:"各个joint 包围box 在 双臂包围box下的比例"}
         shape_lst = []
         file_names = listdir(shape_path)
-        for shape_name in file_names:
-            fbx_file = np.load(join(shape_path, shape_name))
+        for character_shape_name in file_names:
+            # 逐个character的shape 进行操作
+            fbx_file = np.load(join(shape_path, character_shape_name))
+            # arm双臂的包围box
             full_width = fbx_file['full_width'].astype(np.single)
+            #  各个joint的包围box,  [[该joint影响到的点集的包围box]]  # 数组index 代表关节号
             joint_shape = fbx_file['joint_shape'].astype(np.single)
-
+            # 各个joint 包围box 在 双臂包围box下的比例
             shape_vecotr = np.divide(joint_shape, full_width[None, :])
-            self.shape_dic[shape_name.split('.')[0]] = shape_vecotr
+            self.shape_dic[character_shape_name.split('.')[0]] = shape_vecotr
 
             shape_lst.append(shape_vecotr[:, :])
 
         shape_array = np.concatenate(shape_lst, axis=0)
+        # 均值,方差
         self.shape_mean = shape_array.mean(axis=0)
         self.shape_std = shape_array.std(axis=0)
 
@@ -42,28 +52,28 @@ class Feeder(Dataset):
         self.load_data()
 
     def load_data(self):
-        all_local = []
+        all_local = [] # joint-position motion序列
         all_global = []
-        all_skel = []
-        all_names = []
+        all_skel = []  # # joint-offset-position
+        all_names = []  # 一个个的角色名称
         t_skel = []
-        all_quats = []
-        seq_names = []
+        all_quats = []  # joint-ratation motion序列
+        seq_names = [] # 动画名称
 
         folders = [
-            f
-            for f in listdir(self.data_path)
+            f for f in listdir(self.data_path)
             if not f.startswith(".") and not f.endswith("py") and not f.endswith(".npz")
         ]
         for folder_name in folders:
-            files = [
-                f
-                for f in listdir(join(self.data_path, folder_name))
+            # 每个folder_name都是一个 角色目录
+            files = [ 
+                f for f in listdir(join(self.data_path, folder_name))
                 if not f.startswith(".") and f.endswith("_seq.npy")
             ]
             for cfile in files:
+                # 对角色目录里面的3个文件操作
                 file_name = cfile[:-8]
-                # Real joint positions
+                # 读取 joint-offset-positions
                 positions = np.load(
                     join(self.data_path, folder_name, file_name + "_skel.npy")
                 )
@@ -72,17 +82,16 @@ class Feeder(Dataset):
                 sequence = np.load(
                     join(self.data_path, folder_name, file_name + "_seq.npy")
                 )
-
                 # Processed global positions (#frames, 4)
-                offset = sequence[:, -8:-4]
+                offset = sequence[:, -8:-4]  # 是拼接了一个什么东西呢
 
                 # Processed local positions (#frames, #joints, 3)
                 sequence = np.reshape(sequence[:, :-8], [sequence.shape[0], -1, 3])
                 positions[:, 0, :] = sequence[:, 0, :]  # root joint
 
-                all_local.append(sequence)
+                all_local.append(sequence)  # # joint-position motion序列
                 all_global.append(offset)
-                all_skel.append(positions)
+                all_skel.append(positions)  # joint-offset-position
                 all_names.append(folder_name)
                 seq_names.append(file_name)
 
@@ -93,7 +102,7 @@ class Feeder(Dataset):
                 all_quats.append(quat)
 
         # Joint positions before processed
-        train_skel = all_skel  # N T J 3
+        train_skel = all_skel  # N（角色个数） T(帧) J(joint) 3
 
         # After processed, relative position
         train_local = all_local  # N T J 3

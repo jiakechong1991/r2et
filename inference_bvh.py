@@ -711,4 +711,32 @@ if __name__ == '__main__':
                 assert k in key
         parser.set_defaults(**default_arg)
     arg = parser.parse_args()
+    """
+    Namespace(
+    config='./config/inference_bvh_cfg.yaml', 
+    save_path='./save/inference/', 
+    phase='test', 
+    load_inp_data={
+        # 源shape 文件
+        'inp_shape_path': './datasets/mixamo/test_shape/Ortiz.npz', 
+        # target(tgt) shape文件
+        'tgt_shape_path': './datasets/mixamo/test_shape/Sporty_Granny.npz', 
+        # 
+        'stats_path': './datasets/mixamo/stats', 
+        ####同一段动作，应用到了两个body上
+        # 输入bvh(用了anim数据)
+        'inp_bvh_path': './datasets/mixamo/demo/Ortiz/Gangnam Style.bvh', # 江南style
+        # 目标bvh(只解析了骨架信息，他的BVH是我们要预测的[这里它本身其实是GT，作为label,train用])
+        'tgt_bvh_path': './datasets/mixamo/demo/Sporty_Granny/Gangnam Style.bvh'}, 
+    weights='./pretrain/shape_aware.pt',  # modele bin路径
+    device=[0], 
+    num_joint=22, 
+    ret_model_args={
+        'num_joint': 22, 
+        'token_channels': 64, 
+        'hidden_channels_p': 256, 
+        'embed_channels_p': 128, 
+        'kp': 1.0}, 
+    k=0.8)
+    """
     main(arg)
